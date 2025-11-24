@@ -1,149 +1,107 @@
-// socket.js - Socket.io client setup
+import socket from './socket';
 
-import { io } from 'socket.io-client';
-import { useEffect, useState } from 'react';
+// Socket service with promise-based methods
+export const socketService = {
+  // Connection management
+  connect() {
+    return new Promise((resolve, reject) => {
+      if (socket.connected) {
+        resolve(socket);
+        return;
+      }
 
-// Socket.io connection URL
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+      const onConnect = () => {
+        socket.off('connect_error', onError);
+        resolve(socket);
+      };
 
-// Create socket instance
-export const socket = io(SOCKET_URL, {
-  autoConnect: false,
-  reconnection: true,
-  reconnectionAttempts: 5,
-  reconnectionDelay: 1000,
-});
+      const onError = (error) => {
+        socket.off('connect', onConnect);
+        reject(error);
+      };
 
-// Custom hook for using socket.io
-export const useSocket = () => {
-  const [isConnected, setIsConnected] = useState(socket.connected);
-  const [lastMessage, setLastMessage] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [typingUsers, setTypingUsers] = useState([]);
+      socket.once('connect', onConnect);
+      socket.once('connect_error', onError);
+      socket.connect();
+    });
+  },
 
-  // Connect to socket server
-  const connect = (username) => {
-    socket.connect();
-    if (username) {
-      socket.emit('user_join', username);
-    }
-  };
-
-  // Disconnect from socket server
-  const disconnect = () => {
+  disconnect() {
     socket.disconnect();
-  };
+  },
 
-  // Send a message
-  const sendMessage = (message) => {
-    socket.emit('send_message', { message });
-  };
+  // User management
+  joinUser(userData) {
+    socket.emit('user_join', userData);
+  },
 
-  // Send a private message
-  const sendPrivateMessage = (to, message) => {
-    socket.emit('private_message', { to, message });
-  };
+  // Message management
+  sendMessage(messageData) {
+    return new Promise((resolve, reject) => {
+      socket.emit('send_message', messageData, (response) => {
+        if (response && response.success) {
+          resolve(response);
+        } else {
+          reject(response?.error || 'Failed to send message');
+        }
+      });
+    });
+  },
 
-  // Set typing status
-  const setTyping = (isTyping) => {
-    socket.emit('typing', isTyping);
-  };
+  sendPrivateMessage(messageData) {
+    return new Promise((resolve, reject) => {
+      socket.emit('send_private_message', messageData, (response) => {
+        if (response && response.success) {
+          resolve(response);
+        } else {
+          reject(response?.error || 'Failed to send private message');
+        }
+      });
+    });
+  },
 
-  // Socket event listeners
-  useEffect(() => {
-    // Connection events
-    const onConnect = () => {
-      setIsConnected(true);
-    };
+  // Typing indicators
+  startTyping(room) {
+    socket.emit('typing_start', { room });
+  },
 
-    const onDisconnect = () => {
-      setIsConnected(false);
-    };
+  stopTyping(room) {
+    socket.emit('typing_stop', { room });
+  },
 
-    // Message events
-    const onReceiveMessage = (message) => {
-      setLastMessage(message);
-      setMessages((prev) => [...prev, message]);
-    };
+  // Room management
+  joinRoom(roomData) {
+    socket.emit('join_room', roomData);
+  },
 
-    const onPrivateMessage = (message) => {
-      setLastMessage(message);
-      setMessages((prev) => [...prev, message]);
-    };
+  // Event subscription helpers
+  onMessage(callback) {
+    socket.on('new_message', callback);
+    return () => socket.off('new_message', callback);
+  },
 
-    // User events
-    const onUserList = (userList) => {
-      setUsers(userList);
-    };
+  onPrivateMessage(callback) {
+    socket.on('private_message', callback);
+    return () => socket.off('private_message', callback);
+  },
 
-    const onUserJoined = (user) => {
-      // You could add a system message here
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          system: true,
-          message: `${user.username} joined the chat`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    };
-
-    const onUserLeft = (user) => {
-      // You could add a system message here
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          system: true,
-          message: `${user.username} left the chat`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    };
-
-    // Typing events
-    const onTypingUsers = (users) => {
-      setTypingUsers(users);
-    };
-
-    // Register event listeners
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on('receive_message', onReceiveMessage);
-    socket.on('private_message', onPrivateMessage);
-    socket.on('user_list', onUserList);
-    socket.on('user_joined', onUserJoined);
-    socket.on('user_left', onUserLeft);
-    socket.on('typing_users', onTypingUsers);
-
-    // Clean up event listeners
+  onUserUpdate(callback) {
+    socket.on('user_joined', callback);
+    socket.on('user_left', callback);
     return () => {
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
-      socket.off('receive_message', onReceiveMessage);
-      socket.off('private_message', onPrivateMessage);
-      socket.off('user_list', onUserList);
-      socket.off('user_joined', onUserJoined);
-      socket.off('user_left', onUserLeft);
-      socket.off('typing_users', onTypingUsers);
+      socket.off('user_joined', callback);
+      socket.off('user_left', callback);
     };
-  }, []);
+  },
 
-  return {
-    socket,
-    isConnected,
-    lastMessage,
-    messages,
-    users,
-    typingUsers,
-    connect,
-    disconnect,
-    sendMessage,
-    sendPrivateMessage,
-    setTyping,
-  };
+  onTyping(callback) {
+    socket.on('user_typing', callback);
+    socket.on('user_stop_typing', callback);
+    return () => {
+      socket.off('user_typing', callback);
+      socket.off('user_stop_typing', callback);
+    };
+  }
 };
 
-export default socket; 
+export default socketService;
